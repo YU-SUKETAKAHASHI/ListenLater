@@ -61,6 +61,9 @@ class XClient:
         return uid
 
     def _raise_api_error(self, resp: requests.Response, context: str) -> None:
+        if resp.status_code == 400:
+            body = (resp.text or "")[:300]
+            raise XApiAccessError(f"{context}: bad request (400) body={body}", status_code=400)
         if resp.status_code == 401:
             raise XApiAccessError(f"{context}: unauthorized (401). Check token type/scope.", status_code=401)
         if resp.status_code == 403:
@@ -79,50 +82,8 @@ class XClient:
             body = (resp.text or "")[:500]
             raise XApiAccessError(f"{context}: http {resp.status_code} body={body}", status_code=resp.status_code)
 
-    def extract_tweet_id_from_url(self, url: str) -> str | None:
-        m = X_STATUS_URL_RE.search(url or "")
-        return m.group(1) if m else None
 
-    def get_tweet_by_id(self, tweet_id: str) -> dict:
-        params = {
-            "tweet.fields": "created_at,entities,note_tweet,lang",
-        }
-        resp = requests.get(
-            f"{X_API_BASE}/tweets/{tweet_id}",
-            headers=self._headers(),
-            params=params,
-            timeout=30,
-        )
-        self._raise_api_error(resp, f"get tweet by id {tweet_id}")
-        payload = resp.json() or {}
-        data = payload.get("data")
-        if not data:
-            raise XApiAccessError(f"get tweet by id {tweet_id}: response missing data", status_code=500)
-        return data
-
-    def get_tweet_full_text(self, tweet_id: str) -> str:
-        data = self.get_tweet_by_id(tweet_id)
-        note_tweet = data.get("note_tweet") or {}
-        note_text = (note_tweet.get("text") or "").strip()
-        text = (data.get("text") or "").strip()
-
-        # Long post full text is in note_tweet.text when available.
-        full_text = note_text or text
-        if not full_text:
-            raise XApiAccessError(f"tweet {tweet_id}: text is empty", status_code=500)
-
-        # Fallback note for suspicious truncation when note_tweet is unavailable.
-        if (not note_text) and full_text.endswith("…"):
-            full_text = f"{full_text}\n\n[warning] note_tweet was not returned; text may be truncated."
-        return full_text
-
-    def get_tweet_full_text_from_url(self, url: str) -> tuple[str, str]:
-        tweet_id = self.extract_tweet_id_from_url(url)
-        if not tweet_id:
-            raise XApiAccessError("Could not parse tweet id from URL", status_code=400)
-        return tweet_id, self.get_tweet_full_text(tweet_id)
-
-    def get_liked_tweets(self, count: int = 5) -> list[LikedTweet]:
+    def get_liked_tweets(self, count: int = 1) -> list[LikedTweet]:
         user_id = self._resolve_user_id()
         requested_count = max(count, 1)
         api_max_results = min(max(requested_count, 5), 100)
@@ -137,17 +98,15 @@ class XClient:
             params=params,
             timeout=30,
         )
-        if resp.status_code == 400:
-            body = (resp.text or "")[:300]
-            raise XApiAccessError(
-                "X liked_tweets endpoint returned 400 (Bad Request). "
-                f"requested_count={requested_count}, api_max_results={api_max_results}, body={body}",
-                status_code=400,
-            )
-        self._raise_api_error(resp, "get liked_tweets")
+        self._raise_api_error(
+            resp,
+            f"get liked_tweets requested_count={requested_count} api_max_results={api_max_results}",
+        )
         payload = resp.json()
         rows = payload.get("data") or []
         out: list[LikedTweet] = []
+        print(f"Fetched {len(rows)} liked tweets for user_id={user_id}")
+        print(rows)
         for row in rows:
             article = row.get("article") or {}
             article_text = (article.get("plain_text") or article.get("text") or "").strip()
@@ -171,6 +130,7 @@ class XClient:
                         urls.extend(extract_and_normalize_urls(expanded))
 
             urls = list(dict.fromkeys(urls))
+            print(f"Extracted URLs from liked tweet {row.get('id')}: {urls}")
 
             out.append(
                 LikedTweet(
