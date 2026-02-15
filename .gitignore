@@ -1,35 +1,43 @@
+# OS / Editor
 .DS_Store
+.vscode/
+.idea/
+
+# Environment / secrets
 .env
 .env.*
 !.env.example
+backend/.env
+
+# Python
 __pycache__/
+*.py[codz]
+*$py.class
 *.pyc
 *.pyo
 *.pyd
 .Python
 .venv/
 venv/
-*.log
-*.sqlite3
-*.db
-*.tmp
-
-# Python caches/tools
+env/
+ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# IDE/editor
-.vscode/
-.idea/
+# Build / temp / logs
+*.log
+*.tmp
+build/
+dist/
 
-# macOS
-.DS_Store
-
-backend/.env
-backend/.venv/
-backend/app/static/audio/*.mp3
+# Local DB / runtime artifacts
+*.db
+*.sqlite3
 backend/app/data.db
+backend/app/static/audio/*.mp3
+
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
