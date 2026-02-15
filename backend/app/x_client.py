@@ -129,7 +129,7 @@ class XClient:
 
         params = {
             "max_results": api_max_results,
-            "tweet.fields": "created_at,entities,note_tweet",
+            "tweet.fields": "article,created_at,entities,note_tweet",
         }
         resp = requests.get(
             f"{X_API_BASE}/users/{user_id}/liked_tweets",
@@ -147,18 +147,30 @@ class XClient:
         self._raise_api_error(resp, "get liked_tweets")
         payload = resp.json()
         rows = payload.get("data") or []
-
         out: list[LikedTweet] = []
         for row in rows:
-            text = ((row.get("note_tweet") or {}).get("text") or row.get("text") or "")
+            article = row.get("article") or {}
+            article_text = (article.get("plain_text") or article.get("text") or "").strip()
+            text = (article_text or (row.get("note_tweet") or {}).get("text") or row.get("text") or "")
             urls = extract_and_normalize_urls(text)
+
+            # Some liked_tweets rows expose long article data in `article`.
+            # Add a stable i/article URL when present so downstream can treat it as article source.
+            article_id = str(article.get("id") or article.get("article_id") or "").strip()
+            article_url = str(article.get("url") or "").strip()
+            if article_id:
+                urls.append(f"https://x.com/i/article/{article_id}")
+            if article_url:
+                urls.extend(extract_and_normalize_urls(article_url))
+
             if not urls:
                 entities = (row.get("entities") or {}).get("urls") or []
                 for ent in entities:
                     expanded = ent.get("expanded_url") or ent.get("url")
                     if expanded:
                         urls.extend(extract_and_normalize_urls(expanded))
-                urls = list(dict.fromkeys(urls))
+
+            urls = list(dict.fromkeys(urls))
 
             out.append(
                 LikedTweet(

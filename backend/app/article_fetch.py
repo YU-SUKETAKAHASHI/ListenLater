@@ -31,6 +31,7 @@ JS_REQUIRED_PATTERNS = [
 ]
 
 X_STATUS_RE = re.compile(r"https?://(?:x|twitter)\.com/.+/status/(\d+)")
+X_ARTICLE_RE = re.compile(r"https?://(?:x|twitter)\.com/i/article/(\d+)")
 
 
 def _load_x_tokens() -> tuple[str | None, str | None]:
@@ -113,22 +114,25 @@ def _fetch_via_jina_reader(url: str, timeout: int = 25) -> str:
 
 
 def _fetch_x_status_text(url: str, timeout: int = 20) -> ArticleResult | None:
-    m = X_STATUS_RE.search(url)
-    if not m:
+    m_status = X_STATUS_RE.search(url)
+    m_article = X_ARTICLE_RE.search(url)
+    if not m_status and not m_article:
         return None
-    tweet_id = m.group(1)
-    logger.info("X status detected tweet_id=%s url=%s", tweet_id, _short_url(url))
+
+    x_kind = "status" if m_status else "article"
+    tweet_id = (m_status or m_article).group(1)
+    logger.info("X %s detected tweet_id=%s url=%s", x_kind, tweet_id, _short_url(url))
 
     # 1) Preferred path: X API v2 via tweepy with note_tweet field (long-post full text)
     if tweepy is not None:
         try:
             token, _ = _load_x_tokens()
             if token:
-                logger.info("trying tweepy v2 for tweet_id=%s", tweet_id)
+                logger.info("trying tweepy v2 for tweet_id=%s kind=%s", tweet_id, x_kind)
                 client = tweepy.Client(bearer_token=token, wait_on_rate_limit=True)
                 resp = client.get_tweet(
                     id=tweet_id,
-                    tweet_fields=["created_at", "entities", "lang", "note_tweet", "text"],
+                    tweet_fields=["article", "created_at", "entities", "lang", "note_tweet", "text"],
                 )
                 data = getattr(resp, "data", None)
                 if data:
@@ -139,8 +143,9 @@ def _fetch_x_status_text(url: str, timeout: int = 20) -> ArticleResult | None:
                     full_text = note_text or plain_text
                     if full_text:
                         logger.info(
-                            "tweepy success tweet_id=%s method=x_tweepy_v2_note_tweet length=%d note_tweet=%s",
+                            "tweepy success tweet_id=%s kind=%s method=x_tweepy_v2_note_tweet length=%d note_tweet=%s",
                             tweet_id,
+                            x_kind,
                             len(full_text),
                             bool(note_text),
                         )
@@ -152,18 +157,18 @@ def _fetch_x_status_text(url: str, timeout: int = 20) -> ArticleResult | None:
                             method="x_tweepy_v2_note_tweet",
                             ok=True,
                         )
-                logger.warning("tweepy returned empty data for tweet_id=%s", tweet_id)
+                logger.warning("tweepy returned empty data for tweet_id=%s kind=%s", tweet_id, x_kind)
             else:
                 logger.info("tweepy skipped: X token not set")
         except Exception as e:  # noqa: BLE001
-            logger.warning("tweepy failed tweet_id=%s url=%s error=%s", tweet_id, _short_url(url), e)
+            logger.warning("tweepy failed tweet_id=%s kind=%s url=%s error=%s", tweet_id, x_kind, _short_url(url), e)
     else:
         logger.info("tweepy module unavailable; using fallback for tweet_id=%s", tweet_id)
 
     # 2) Fallback path: syndication endpoint
     endpoint = f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&lang=ja"
     try:
-        logger.info("trying syndication fallback for tweet_id=%s", tweet_id)
+        logger.info("trying syndication fallback for tweet_id=%s kind=%s", tweet_id, x_kind)
         resp = requests.get(endpoint, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
         data = resp.json() if resp.text else {}
