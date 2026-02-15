@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
+import threading
 import traceback
 import uuid
 from dataclasses import asdict
@@ -93,7 +93,7 @@ class JobManager:
     def set_stage(self, job_id: str, stage: str) -> None:
         self.update(job_id, failure_stage=stage)
 
-    async def run_pipeline(self, job_id: str, count: int, audio_dir: Path) -> None:
+    def run_pipeline(self, job_id: str, count: int, audio_dir: Path) -> None:
         try:
             self.set_stage(job_id, "fetch_likes")
             self.add_event(job_id, "fetch_likes", "start")
@@ -310,4 +310,8 @@ job_manager = JobManager()
 
 
 def launch_pipeline(job_id: str, count: int, audio_dir: Path) -> None:
-    asyncio.create_task(job_manager.run_pipeline(job_id=job_id, count=count, audio_dir=audio_dir))
+    threading.Thread(
+        target=job_manager.run_pipeline,
+        kwargs={"job_id": job_id, "count": count, "audio_dir": audio_dir},
+        daemon=True,
+    ).start()
