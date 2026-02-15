@@ -1,0 +1,35 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.log
+*.sqlite3
+*.db
+*.tmp
+
+# Python caches/tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+backend/.env
+backend/.venv/
+backend/app/static/audio/*.mp3
+backend/app/data.db
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
