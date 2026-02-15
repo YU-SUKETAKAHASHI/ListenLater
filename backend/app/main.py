@@ -24,7 +24,7 @@ STATIC_DIR = BASE_DIR / "static"
 AUDIO_DIR = STATIC_DIR / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="DigLIKE PoC API", version="0.1.0")
+app = FastAPI(title="ListenLater PoC API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

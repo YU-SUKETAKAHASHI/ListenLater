@@ -105,56 +105,48 @@ class JobManager:
             self.set_stage(job_id, "extract_sources")
             self.update(job_id, progress=15, message="Extracting source materials")
 
-            work_items: list[dict[str, Any]] = []
+            tweet_items: list[dict[str, Any]] = []
             unique_urls: list[str] = []
             seen_urls: set[str] = set()
-            tweet_only_candidates = 0
 
             for t in liked:
                 tweet_text = (t.text or "").strip()
                 tweet_url = f"https://x.com/i/web/status/{t.tweet_id}" if t.tweet_id else ""
-                if t.urls:
-                    for u in t.urls:
-                        if u in seen_urls:
-                            continue
+                raw_urls = t.urls or []
+                tweet_id_str = str(t.tweet_id or "")
+                # Exclude self tweet URLs (same tweet_id) from candidate article URLs.
+                urls = [u for u in raw_urls if u and (not tweet_id_str or tweet_id_str not in u)]
+                for u in urls:
+                    if u not in seen_urls:
                         seen_urls.add(u)
                         unique_urls.append(u)
-                        work_items.append(
-                            {
-                                "type": "url",
-                                "url": u,
-                                "tweet_text": tweet_text,
-                                "tweet_url": tweet_url,
-                                "tweet_id": t.tweet_id,
-                            }
-                        )
-                elif tweet_text:
-                    tweet_only_candidates += 1
-                    work_items.append(
-                        {
-                            "type": "tweet",
-                            "url": tweet_url or f"x://tweet/{t.tweet_id}",
-                            "tweet_text": tweet_text,
-                            "tweet_url": tweet_url,
-                            "tweet_id": t.tweet_id,
-                        }
-                    )
+                tweet_items.append(
+                    {
+                        "tweet_id": t.tweet_id,
+                        "tweet_url": tweet_url,
+                        "tweet_text": tweet_text,
+                        "urls": urls,
+                    }
+                )
 
             self.add_event(
                 job_id,
                 "extract_sources",
                 "done",
                 detail={
+                    "tweet_count": len(tweet_items),
                     "url_count": len(unique_urls),
-                    "tweet_only_candidates": tweet_only_candidates,
-                    "work_item_count": len(work_items),
+                    "work_item_count": len(tweet_items),
                 },
             )
 
-            if not work_items:
+            if not tweet_items:
                 fallback_urls = _fallback_urls_from_env()
                 if fallback_urls:
-                    work_items = [{"type": "url", "url": u, "tweet_text": "", "tweet_url": "", "tweet_id": ""} for u in fallback_urls]
+                    tweet_items = [
+                        {"tweet_id": "", "tweet_url": "", "tweet_text": "", "urls": [u]}
+                        for u in fallback_urls
+                    ]
                     unique_urls = fallback_urls
                     self.update(job_id, progress=20, message="No processable likes found. Using FALLBACK_SOURCE_URLS")
                 else:
@@ -162,72 +154,56 @@ class JobManager:
 
             materials: list[dict[str, str]] = []
             skipped: list[dict[str, str]] = []
-            total = len(work_items)
-            for idx, item in enumerate(work_items, start=1):
+            total = len(tweet_items)
+            for idx, item in enumerate(tweet_items, start=1):
                 progress = 15 + int((idx / total) * 45)
-                item_type = item.get("type")
+                tweet_text = str(item.get("tweet_text") or "")
+                tweet_id = str(item.get("tweet_id") or "")
+                tweet_url = str(item.get("tweet_url") or "")
+                urls = [str(u) for u in (item.get("urls") or []) if str(u).strip()]
 
-                if item_type == "url":
-                    url = str(item.get("url") or "")
-                    tweet_text = str(item.get("tweet_text") or "")
+                # 1 tweet = 1 material. Default content is tweet text.
+                selected_title = f"X投稿 {tweet_id}" if tweet_id else "X投稿"
+                selected_url = tweet_url or (urls[0] if urls else f"x://tweet/{tweet_id}")
+                selected_content = ""
+                selected_method = "tweet_text_only"
+                selected_kind = "tweet"
 
+                # If tweet contains URL(s), try fetching article and replace content on first success.
+                if urls:
                     self.set_stage(job_id, "fetch_article")
                     self.update(job_id, progress=progress, message=f"Fetching source {idx}/{total}")
-                    article = fetch_article(url)
-
-                    if article.ok and (article.content or "").strip():
-                        materials.append(
-                            {
-                                "kind": "article",
-                                "title": article.title,
-                                "url": article.final_url,
-                                "tweet_text": tweet_text,
-                                "content": article.content,
-                                "method": article.method,
-                            }
-                        )
-                        continue
-
-                    if tweet_text:
-                        materials.append(
-                            {
-                                "kind": "tweet_comment_fallback",
-                                "title": "X投稿コメント",
-                                "url": url,
-                                "tweet_text": tweet_text,
-                                "content": tweet_text,
-                                "method": "tweet_fallback",
-                            }
-                        )
+                    fetched = False
+                    for u in urls:
+                        article = fetch_article(u)
+                        if article.ok and (article.content or "").strip():
+                            selected_title = article.title
+                            selected_url = article.final_url
+                            selected_content = article.content
+                            selected_method = article.method
+                            selected_kind = "article_from_tweet"
+                            fetched = True
+                            break
+                        skipped.append({"url": u, "reason": article.error or "content_too_short"})
+                    if not fetched:
                         self.add_event(
                             job_id,
                             "fetch_article",
-                            "article_failed_tweet_fallback_used",
+                            "all_urls_failed_content_empty",
                             level="warning",
-                            detail={"url": url, "reason": article.error or "empty_content"},
+                            detail={"tweet_id": tweet_id, "url_count": len(urls)},
                         )
-                        continue
 
-                    skipped.append({"url": url, "reason": article.error or "content_too_short"})
-                    continue
-
-                if item_type == "tweet":
-                    tweet_text = str(item.get("tweet_text") or "").strip()
-                    tweet_url = str(item.get("tweet_url") or item.get("url") or "")
-                    tweet_id = str(item.get("tweet_id") or "")
-                    if not tweet_text:
-                        skipped.append({"url": tweet_url or f"x://tweet/{tweet_id}", "reason": "tweet_text_empty"})
-                        continue
-                    materials.append(
-                        {
-                            "kind": "tweet",
-                            "title": f"X投稿 {tweet_id}" if tweet_id else "X投稿",
-                            "url": tweet_url or f"x://tweet/{tweet_id}",
-                            "tweet_text": tweet_text,
-                            "content": tweet_text,
-                            "method": "tweet_text",
-                        }
-                    )
+                materials.append(
+                    {
+                        "kind": selected_kind,
+                        "title": selected_title,
+                        "url": selected_url,
+                        "tweet_text": tweet_text,
+                        "content": selected_content,
+                        "method": selected_method,
+                    }
+                )
 
             if not materials:
                 raise RuntimeError("No rich source materials could be extracted")

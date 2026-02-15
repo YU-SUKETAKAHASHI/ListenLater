@@ -15,6 +15,7 @@ frontend/ React(Vite)+TypeScript の最小UI
 - Node.js / npm
 - X APIトークン（Bearer または Access token）
 - OpenAI APIキー
+- tweepy（`pip install -r backend/requirements.txt` で導入）
 
 ## セキュリティ注意
 
@@ -125,3 +126,85 @@ npm run dev --prefix frontend
 
 - `.env` の `X_ACCESS_TOKEN` / `X_BEARER_TOKEN` があればそれも利用可能です。
 - OAuthログインで取得したトークンは SQLite (`x_auth`) に保存され、`x_client.py` から参照されます。
+
+## 長文投稿（Long post）がHTML fetchで取れない理由と正攻法
+
+### 1) なぜスクレイピングで失敗するか
+
+- Xの投稿ページはクライアント側JavaScriptで本文を組み立てて描画することが多く、静的HTMLだけでは本文が十分に含まれません。
+- そのため `requests` でURLを叩いてDOMを取る方式は、長文投稿で「JS必須」「非対応ブラウザ」表示に当たりやすく、本文抽出が不安定になります。
+
+### 2) X API v2で長文投稿の全文を取る正しい方法
+
+- エンドポイント: `GET /2/tweets/:id`
+- 重要な `tweet.fields`: `text,note_tweet`（加えて `created_at,entities,lang` など）
+- 理由: 長文投稿の全文は `note_tweet.text` に入るため、`text` だけだと欠ける可能性があります。
+
+例（クエリ文字列）:
+
+```text
+GET https://api.x.com/2/tweets/2021927266146570397?tweet.fields=text,note_tweet,created_at,entities,lang
+```
+
+### 3) Python短例（URL→投稿ID→API→全文表示）
+
+```python
+import os
+import re
+import requests
+
+TOKEN = os.environ["X_ACCESS_TOKEN"]  # または X_BEARER_TOKEN
+URL_RE = re.compile(r"https?://(?:x|twitter)\.com/.+/status/(\d+)")
+
+def extract_tweet_id(url: str) -> str:
+    m = URL_RE.search(url)
+    if not m:
+        raise ValueError("tweet id をURLから抽出できません")
+    return m.group(1)
+
+def fetch_full_text(tweet_url: str) -> str:
+    tweet_id = extract_tweet_id(tweet_url)
+    endpoint = f"https://api.x.com/2/tweets/{tweet_id}"
+    params = {"tweet.fields": "text,note_tweet,created_at,entities,lang"}
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+
+    r = requests.get(endpoint, params=params, headers=headers, timeout=30)
+    if r.status_code == 401:
+        raise RuntimeError("401 Unauthorized: トークン不正/期限切れ")
+    if r.status_code == 403:
+        raise RuntimeError("403 Forbidden: OAuth user context / scope不足")
+    if r.status_code == 404:
+        raise RuntimeError("404 Not Found: 投稿削除・非公開の可能性")
+    r.raise_for_status()
+
+    data = (r.json() or {}).get("data") or {}
+    note_text = ((data.get("note_tweet") or {}).get("text") or "").strip()
+    text = (data.get("text") or "").strip()
+    full_text = note_text or text
+    if not full_text:
+        raise RuntimeError("本文が空です")
+
+    # fallback: note_tweetが返らず末尾が省略記号の場合
+    if not note_text and full_text.endswith("…"):
+        full_text += "\n\n[warning] note_tweet が返らず、本文が省略されている可能性があります"
+    return full_text
+```
+
+### 4) 本プロジェクト内の実装箇所
+
+- `backend/app/x_client.py`
+  - `get_tweet_by_id()`
+  - `get_tweet_full_text()`
+  - `get_tweet_full_text_from_url()`
+  - `get_liked_tweets()` でも `tweet.fields` に `note_tweet` を含め、`note_tweet.text` 優先で本文を採用
+
+- エラーハンドリング
+  - `401`: 認証トークン問題
+  - `403`: 権限/スコープ不足（ユーザーコンテキスト必須）
+  - `404`: 投稿不存在（削除/非公開）
+  - `note_tweet` 不在時の省略疑い（末尾 `…`）に警告fallback
+
+- `backend/app/article_fetch.py`
+  - X投稿URL検出時はまず `tweepy.Client(...).get_tweet(..., tweet_fields=["note_tweet", "text", ...])` を実行
+  - `note_tweet.text` 優先で本文を採用
+  - tweepyで失敗した場合のみ `cdn.syndication` フォールバック
