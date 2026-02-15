@@ -1,0 +1,37 @@
+あなたは情報を構造化する専門家です。
+以下のコンテンツを、音声番組用の素材として再利用できるように、厳密に構造化してください。
+
+目的は、情報を削りすぎずに整理し、後段でポッドキャスト形式へ再編できる状態にすることです。
+
+出力は必ずJSON形式で、指定されたキーのみを含めてください。
+解説文や追加テキストは一切不要です。
+
+【要件】
+- 主観的な表現は禁止
+- 語り口は禁止
+- 推測は禁止
+- 内容を歪めない
+- 専門用語は簡潔に説明を付ける
+- 誇張しない
+
+【出力フォーマット】
+{
+  "title": "",
+  "summary_one_sentence": "",
+  "core_question": "",
+  "why_it_matters": "",
+  "key_points": [
+    {"point": "", "explanation": ""}
+  ],
+  "background_context": "",
+  "implications": "",
+  "controversies_or_limitations": "",
+  "technical_terms": [
+    {"term": "", "simple_explanation": ""}
+  ]
+}
+
+以下がコンテンツです：
+----
+{{ARTICLE_OR_POST_TEXT}}
+----

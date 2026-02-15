@@ -48,6 +48,6 @@ def extract_and_normalize_urls(text: str) -> list[str]:
     return ordered
 
 
-def compact_text(value: str, max_chars: int = 8000) -> str:
+def compact_text(value: str, max_chars: int = 12000) -> str:
     v = re.sub(r"\s+", " ", (value or "")).strip()
     return v[:max_chars]
